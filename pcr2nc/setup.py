@@ -30,7 +30,7 @@ pip install pcr2nc
 """
 
 import os
-from setuptools import setup, find_packages
+from setuptools import find_packages
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 readme_file = os.path.join(current_dir, 'README.md')
@@ -49,13 +49,12 @@ setup_args = dict(
     description='Convert PCRaster files to netCDF4',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    install_requires=['numpy>=1.15', 'pyyaml', 'netCDF4>=1.3.1'],
+    install_requires=['numpy>=1.15', 'PyYAML', 'netCDF4>=1.3.1'],
     author="Domenico Nappo",
     author_email="domenico.nappo@gmail.com",
     keywords=['netCDF4', 'PCRaster', 'mapstack'],
     license='EUPL 1.2',
     url='https://github.com/ec-jrc/lisflood-model',
-    # entry_points={'console_scripts': ['pcr2nc = pcr2nc_script:main_script']},
     scripts=['bin/pcr2nc'],
     zip_safe=True,
     classifiers=[
@@ -75,5 +74,3 @@ setup_args = dict(
           'Topic :: Scientific/Engineering :: Physics',
     ],
 )
-
-setup(**setup_args)

@@ -182,7 +182,8 @@ class PCRasterReader:
             for f in filelist:
                 yield PCRasterMap.build(f), self._extract_timestep(f)
         elif self.input_is_dir():
-            filelist = sorted((f for f in os.listdir(self.input_set) if not f.endswith('.nc')), key=self._extract_timestep)
+            filelist = sorted((f for f in os.listdir(self.input_set) if not f.endswith('.nc')),
+                              key=self._extract_timestep)
             for f in filelist:
                 f = os.path.join(self.input_set, f)
                 yield PCRasterMap.build(f), self._extract_timestep(f)
