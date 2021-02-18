@@ -17,18 +17,20 @@ See the Licence for the specific language governing permissions and limitations 
 
 import os
 import sys
-import logging
+import datetime
 from pathlib import Path
 
 import xarray as xr
 import numpy as np
 
+from dask.diagnostics import ProgressBar
+
 from .helpers import pcraster_command
 from ..readers.pcr import PCRasterMap
-from .. import version
+from ..pcr2nc import convert
+from .. import version, logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('CUTMAPS')
+encoding_netcdf_vars = {'zlib': False}
 
 
 def cutmap(f, fileout, x_min, x_max, y_min, y_max):
@@ -37,7 +39,7 @@ def cutmap(f, fileout, x_min, x_max, y_min, y_max):
     logger.info('Variable: %s', var)
 
     if isinstance(x_min, float):
-        # bounding box input from user  # FIXME weak isistance test
+        # bounding box input from user  # FIXME weak isinstance test
         sliced_var = cut_from_coords(nc, var, x_min, x_max, y_min, y_max)
     else:
         # user provides with indices directly (not coordinates)
@@ -47,33 +49,46 @@ def cutmap(f, fileout, x_min, x_max, y_min, y_max):
         if 'missing_value' in sliced_var.encoding:
             sliced_var.encoding['_FillValue'] = sliced_var.encoding['missing_value']
         logger.info('Creating: %s', fileout)
-        sliced_var.to_netcdf(fileout)
-    if 'laea' in nc.variables or 'lambert_azimuthal_equal_area' in nc.variables:
-        var = nc.variables['laea'] if 'laea' in nc.variables else nc.variables['lambert_azimuthal_equal_area']
-        logger.info('Found projection variable: %s', var)
-        xr.DataArray(name='laea', data=var.data, dims=var.dims, attrs=var.attrs).to_netcdf(fileout, mode='a')
+        delayed_obj = sliced_var.to_netcdf(fileout, compute=False, encoding={var: encoding_netcdf_vars})
+        with ProgressBar(dt=0.1):
+            _ = delayed_obj.compute()
+
+    grid_mapping = sliced_var.attrs.get('grid_mapping')
+    if grid_mapping in nc.variables:
+        varname = grid_mapping
+        varproj = nc.variables[varname]
+        logger.info('Writing projection variable: %s - %s', varname, varproj.attrs)
+        del_res = xr.DataArray(name=varname, data=varproj.data, dims=varproj.dims, attrs=varproj.attrs).to_netcdf(fileout, mode='a', compute=False)
+        with ProgressBar(dt=0.1):
+            _ = del_res.compute()
 
     # adding global attributes
     nc_out, _ = open_dataset(fileout)
     nc_out.attrs = nc.attrs
+    nc_out.attrs['history'] = 'lisfloodutilities cutmaps {} {} \n {}'.format(
+        version, datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), nc_out.attrs.get('history', '')
+    )
     nc_out.attrs['conventions'] = 'CF-1.6'
     nc_out.attrs['institution'] = 'JRC E1'
-    nc_out.attrs['Conventions'] = 'CF-1.6'
-    nc_out.attrs['Institution'] = 'JRC E1'
-    nc_out.attrs['Source_Software'] = 'lisfloodutilities cutmaps {}'.format(version)
     nc_out.attrs['source_software'] = 'lisfloodutilities cutmaps {}'.format(version)
+    nc_out.attrs.pop('Source_Software', None)
+    nc_out.attrs.pop('Institution', None)
+    nc_out.attrs.pop('Conventions', None)
     nc_out.close()
     try:
-        nc_out.to_netcdf(fileout, 'a')
-    except ValueError:
-        logger.warning('Cannot add global attributes to %s', fileout)
+        logger.info('Writing additional attrs to: %s - %s', fileout, nc_out.attrs)
+        del_res = nc_out.to_netcdf(fileout, 'a', compute=False)
+        with ProgressBar(dt=0.1):
+            _ = del_res.compute()
+    except ValueError as e:
+        logger.warning('Cannot add global attributes to %s - %s', fileout, e)
     finally:
         nc.close()
 
 
 def open_dataset(f):
     try:
-        nc = xr.open_dataset(f, chunks={'time': 100}, decode_cf=False)
+        nc = xr.open_dataset(f, chunks={'time': 250}, decode_cf=False)
         num_dims = 3
     except Exception:  # file has no time component
         num_dims = 2
@@ -169,16 +184,20 @@ def mask_from_ldd(ldd_map, stations):
         from pcraster import accuflux
     except ImportError as e:
         logger.error('PCRaster not installed. Try to install PCRaster >= 4.3.0 in a conda environment '
-                     'and then install lisfloodutilities with pip')
+                     'and then execute `pip install lisflood-utilities`')
         raise e
 
     path = os.path.dirname(stations)
 
-    station_map = os.path.join(path, 'outlet.map')
+    station_map = os.path.join(path, 'outlets.map')
     pcraster_command(cmd='col2map F0 F1 -N --clone F2 --large', files=dict(F0=stations, F1=station_map, F2=ldd_map))
-
-    # accuflux_map = os.path.join(path, 'accuflux.map')
-    # pcraster_command(cmd="pcrcalc 'F0 = accuflux(F1,1)'", files=dict(F0=accuflux_map, F1=ldd_map))
+    pcr2nc_metadata = {'variable': {'description': 'outlets points', 'longname': 'outlets', 'units': '',
+                                    'shortname': 'outlets', 'mv': '0'},
+                       'source': 'JRC E.1 Space, Security, Migration',
+                       'reference': 'JRC E.1 Space, Security, Migration',
+                       'geographical': {'datum': ''}}
+    outlets_nc = os.path.join(path, 'outlets.nc')
+    convert(station_map, outlets_nc, pcr2nc_metadata)
 
     tmp_txt = os.path.join(path, 'tmp.txt')
     tmp_map = os.path.join(path, 'tmp.map')
@@ -212,7 +231,14 @@ def mask_from_ldd(ldd_map, stations):
     pcraster_command(cmd="pcrcalc 'F0 = boolean(if(scalar(F1) != -1, scalar(1)))'",
                      files=dict(F0=tempmask_map, F1=regions_map))
     pcraster_command(cmd='resample -c 0 F0 F1', files=dict(F0=tempmask_map, F1=smallmask_map))
-    # os.unlink(accuflux_map)
     os.unlink(tempmask_map)
     os.unlink(regions_map)
-    return smallmask_map
+    # create mask map in netCDF
+    pcr2nc_metadata = {'variable': {'description': 'Mask Area', 'longname': 'mask', 'units': '',
+                                    'shortname': 'mask', 'mv': '0'},
+                       'source': 'JRC E.1 Space, Security, Migration',
+                       'reference': 'JRC E.1 Space, Security, Migration',
+                       'geographical': {'datum': ''}}
+    maskmap_nc = os.path.join(path, 'my_mask.nc')
+    convert(smallmask_map, maskmap_nc, pcr2nc_metadata)
+    return smallmask_map, outlets_nc

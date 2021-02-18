@@ -23,6 +23,7 @@ from netCDF4 import Dataset
 from lisfloodutilities import IS_PYTHON2
 from lisfloodutilities.cutmaps.cutlib import get_filelist, get_cuts, cutmap, mask_from_ldd
 from lisfloodutilities.nc2pcr import convert
+from lisfloodutilities.compare.nc import NetCDFComparator
 
 if IS_PYTHON2:
     from pathlib2 import Path
@@ -97,6 +98,27 @@ class TestCutlib:
         assert res_x == -127.25
         assert res_y == 53.05
 
+    def test_get_cuts_withmaskfile_compare(self):
+        maskfile = 'tests/data/submask/subcatchment_mask.map'
+        x_min, x_max, y_min, y_max = get_cuts(mask=maskfile)
+        x_minr, x_maxr, y_minr, y_maxr = np.round(x_min, 2), np.round(x_max, 2), np.round(y_min, 2), np.round(y_max, 2)
+        assert (x_minr, x_maxr, y_minr, y_maxr) == (4052500.0, 4232500.0, 2332500.0, 2542500.0)
+        fin = 'tests/data/submask/dis.nc'
+        fout = 'tests/data/submask/dis_cut.nc'
+        cutmap(fin, fout, x_min, x_max, y_min, y_max)
+        with Dataset(fout) as nc:
+            lons = nc.variables['x'][:]
+            lats = nc.variables['y'][:]
+            res_x = np.round(np.min(lons), 2)
+            res_y = np.round(np.min(lats), 2)
+        assert res_x == 4052500.0
+        assert res_y == 2332500.0
+        comparator = NetCDFComparator(mask=maskfile, array_equal=True)
+        comparator.compare_files(fin, fout)
+        comparator = NetCDFComparator(array_equal=True)
+        comparator.compare_files(fout, 'tests/data/submask/dis_subdomain.nc')
+        os.unlink(fout)
+
     def test_get_cuts_withmaskpcr(self):
         maskfile = 'tests/data/asia.map'
         x_min, x_max, y_min, y_max = get_cuts(mask=maskfile)
@@ -120,7 +142,7 @@ class TestCutlib:
         stations = 'tests/data/cutmaps/stations.txt'
 
         ldd_pcr = convert(ldd, clonemap, 'tests/data/cutmaps/ldd_eu_test.map', is_ldd=True)[0]
-        mask = mask_from_ldd(ldd_pcr, stations)
+        mask, outlets_points = mask_from_ldd(ldd_pcr, stations)
         x_min, x_max, y_min, y_max = get_cuts(mask=mask)
         # 4067500.0 4397500.0 1282500.0 1577500.0
         assert (x_min, x_max, y_min, y_max) == (4067500, 4397500, 1282500, 1577500)
